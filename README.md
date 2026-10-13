@@ -1,8 +1,8 @@
 # مشغل الصوت — Audio Player
 
-مشغّل صوتيات للملفات المحلية مبني بـ Flutter، بتصميم زجاجي مستوحى من أحدث iOS، يعمل على أندرويد والماك.
+مشغّل صوتيات للملفات المحلية مبني بـ Flutter، بتصميم زجاجي مستوحى من أحدث iOS، ويعمل على جميع أنظمة التشغيل.
 
-A Flutter player for local audio files with an iOS-inspired "liquid glass" design, running on Android and macOS.
+A cross-platform Flutter player for local audio files with an iOS-inspired "liquid glass" design.
 
 ## المميزات
 
