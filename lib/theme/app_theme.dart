@@ -1,19 +1,19 @@
 import 'package:flutter/material.dart';
 
-/// "Liquid glass" palette: the icon's pink as the accent, with iOS violet and
-/// blue for the aurora glow the translucent surfaces refract.
+/// "Liquid glass" palette: iOS green as the accent with iOS mint as its
+/// gradient partner, plus blue for the aurora glow the glass refracts.
 class AppColors {
-  static const pink = Color(0xFFFF2D55);
-  static const pinkDark = Color(0xFFFF375F);
-  static const violet = Color(0xFFAF52DE);
-  static const violetDark = Color(0xFFBF5AF2);
+  static const green = Color(0xFF34C759);
+  static const greenDark = Color(0xFF30D158);
+  static const mint = Color(0xFF00C7BE);
+  static const mintDark = Color(0xFF63E6E2);
   static const blue = Color(0xFF007AFF);
   static const blueDark = Color(0xFF0A84FF);
 
   /// Accent gradient for highlighted glass (play button, artwork fallback).
   static List<Color> accentGradient(Brightness b) => b == Brightness.dark
-      ? const [pinkDark, violetDark]
-      : const [pink, violet];
+      ? const [greenDark, mintDark]
+      : const [green, mint];
 }
 
 ThemeData buildAppTheme(Brightness brightness) {
@@ -21,17 +21,17 @@ ThemeData buildAppTheme(Brightness brightness) {
 
   final cs =
       ColorScheme.fromSeed(
-        seedColor: AppColors.pink,
+        seedColor: AppColors.green,
         brightness: brightness,
       ).copyWith(
-        primary: dark ? AppColors.pinkDark : AppColors.pink,
+        primary: dark ? AppColors.greenDark : AppColors.green,
         onPrimary: Colors.white,
         // iOS system red for destructive actions.
         error: dark ? const Color(0xFFFF453A) : const Color(0xFFFF3B30),
         onError: Colors.white,
         secondary: dark ? AppColors.blueDark : AppColors.blue,
         onSecondary: Colors.white,
-        tertiary: dark ? AppColors.violetDark : AppColors.violet,
+        tertiary: dark ? AppColors.mintDark : AppColors.mint,
         onTertiary: Colors.white,
         // Neutral iOS system greys instead of pink-tinted Material surfaces.
         surface: dark ? Colors.black : const Color(0xFFF2F2F7),
