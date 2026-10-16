@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../audio_manager.dart';
 import '../audio_scanner.dart';
+import '../library.dart';
 import '../metadata_cache.dart';
 import '../smooth_page_route.dart';
 import '../l10n/app_localizations.dart';
@@ -54,6 +55,7 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
   final _scrollFolders = ScrollController();
   Timer? _autoRefreshTimer;
   StreamSubscription<Set<String>>? _deletedSub;
+  StreamSubscription<Map<String, String>>? _movedSub;
 
   @override
   void initState() {
@@ -61,6 +63,9 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     AudioManager().currentPath.addListener(_onTrackChanged);
     _deletedSub = AudioManager().deletedFilesStream.listen(_onFilesDeleted);
+    _movedSub = AudioManager().movedFilesStream.listen(_onFilesMoved);
+    Library().createdFolders.addListener(_onCreatedFoldersChanged);
+    Library().loadCreatedFolders();
     _initData();
     _startAutoRefresh();
   }
@@ -71,6 +76,8 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
     AudioManager().currentPath.removeListener(_onTrackChanged);
     _autoRefreshTimer?.cancel();
     _deletedSub?.cancel();
+    _movedSub?.cancel();
+    Library().createdFolders.removeListener(_onCreatedFoldersChanged);
     _searchController.dispose();
     _scrollAll.dispose();
     _scrollFolders.dispose();
@@ -214,6 +221,67 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
         _sortedFiles = List.of(_allFiles)..sort((a, b) => byName(b, a));
         _folderKeys = folders..sort((a, b) => byLabel(b, a));
     }
+    Library().scannedFolders.value = List.unmodifiable(_folderKeys);
+  }
+
+  void _onCreatedFoldersChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onFilesMoved(Map<String, String> moves) {
+    if (!mounted) return;
+    final updated = [
+      for (final f in _allFiles)
+        moves.containsKey(f.path) ? File(moves[f.path]!) : f,
+    ];
+    _selected.removeAll(moves.keys);
+    setState(() => _applyFiles(updated, needSort: false));
+    MetadataCache().saveCachedPaths(updated.map((f) => f.path).toList());
+  }
+
+  /// Library folders plus empty folders created in the app, all in the
+  /// chosen sort order (an empty folder sorts by its own date, since it has
+  /// no newest file).
+  List<String> get _allFolderKeys {
+    final empty = [
+      for (final f in Library().createdFolders.value)
+        if (!_groupedFiles.containsKey(f)) f,
+    ];
+    if (empty.isEmpty) return _folderKeys;
+
+    final keys = [..._folderKeys, ...empty];
+    int byLabel(String a, String b) =>
+        _folderLabel(a).toLowerCase().compareTo(_folderLabel(b).toLowerCase());
+    final cache = MetadataCache();
+    DateTime folderDate(String folder) {
+      final files = _groupedFiles[folder];
+      // Groups keep the library's newest-first order, so [0] is the newest.
+      if (files != null && files.isNotEmpty) {
+        return cache.getFileModTime(files.first);
+      }
+      try {
+        return Directory(folder).statSync().modified;
+      } catch (_) {
+        return DateTime.fromMillisecondsSinceEpoch(0);
+      }
+    }
+
+    switch (_sortMode) {
+      case SortMode.dateNewest:
+        keys.sort((a, b) => folderDate(b).compareTo(folderDate(a)));
+      case SortMode.dateOldest:
+        keys.sort((a, b) => folderDate(a).compareTo(folderDate(b)));
+      case SortMode.nameAZ:
+        keys.sort(byLabel);
+      case SortMode.nameZA:
+        keys.sort((a, b) => byLabel(b, a));
+    }
+    return keys;
+  }
+
+  Future<void> _moveSelected() async {
+    final moved = await moveSongsToFolder(context, _selected.toList());
+    if (moved && mounted) _clearSelection();
   }
 
   void _onFilesDeleted(Set<String> paths) {
@@ -331,13 +399,15 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
   }
 
   void _openFolder(String key) {
-    final files = _groupedFiles[key];
-    if (files == null) return;
+    final files = _groupedFiles[key] ?? const <File>[];
     Navigator.push(
       context,
       SmoothPageRoute(
-        builder: (_) =>
-            FolderSongsPage(folderLabel: _folderLabel(key), files: files),
+        builder: (_) => FolderSongsPage(
+          folderLabel: _folderLabel(key),
+          folderPath: key,
+          files: files,
+        ),
       ),
     );
   }
@@ -562,6 +632,14 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
       const SizedBox(width: 10),
       GlassIconButton(
         blur: 0,
+        icon: Icons.drive_file_move_outline,
+        size: 42,
+        tooltip: l10n.moveToFolder,
+        onPressed: _moveSelected,
+      ),
+      const SizedBox(width: 10),
+      GlassIconButton(
+        blur: 0,
         icon: Icons.delete_outline_rounded,
         size: 42,
         tooltip: l10n.deleteSelected,
@@ -710,9 +788,8 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
       return ErrorView(message: _errorMessage!, onRetry: _onRetry);
     }
 
-    if (_groupedFiles.isEmpty) return _refreshable(const EmptyView());
-
-    var keys = _folderKeys;
+    var keys = _allFolderKeys;
+    if (keys.isEmpty) return _refreshable(const EmptyView());
     if (_searchQuery.isNotEmpty) {
       keys = keys.where((k) => _matches(_folderLabel(k))).toList();
       if (keys.isEmpty) return _refreshable(_buildNoResults());
@@ -725,8 +802,13 @@ class _SongsPageState extends State<SongsPage> with WidgetsBindingObserver {
         controller: _scrollFolders,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: _listPadding,
-        itemCount: keys.length,
+        // First row: "New folder" (hidden while searching).
+        itemCount: keys.length + (_searchQuery.isEmpty ? 1 : 0),
         itemBuilder: (_, i) {
+          if (_searchQuery.isEmpty) {
+            if (i == 0) return const _NewFolderTile();
+            i -= 1;
+          }
           final key = keys[i];
           return FolderCard(
             key: ValueKey(key),
@@ -863,6 +945,49 @@ class _GlassTabs extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// "New folder" row at the top of the folders tab.
+class _NewFolderTile extends StatelessWidget {
+  const _NewFolderTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassTile(
+        onTap: () => showNewFolderDialog(context),
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: cs.primary.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                Icons.create_new_folder_outlined,
+                color: cs.primary,
+                size: 26,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              AppLocalizations.of(context).newFolder,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: cs.primary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

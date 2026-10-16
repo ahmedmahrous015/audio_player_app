@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import '../library.dart';
 import '../metadata_cache.dart';
 import '../utils/format_utils.dart';
 import '../utils/song_actions.dart';
@@ -72,7 +73,12 @@ class FolderCard extends StatelessWidget {
     if (action == null || !context.mounted) return;
     switch (action) {
       case _FolderAction.delete:
-        await confirmAndDeleteSongs(context, _paths, folderPath: folderPath);
+        if (files.isEmpty) {
+          // An empty folder created in the app: just remove the folder.
+          await Library().removeCreatedFolder(folderPath);
+        } else {
+          await confirmAndDeleteSongs(context, _paths, folderPath: folderPath);
+        }
       case _FolderAction.share:
         await shareSongs(_paths, text: label);
       case _FolderAction.details:

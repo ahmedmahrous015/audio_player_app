@@ -173,10 +173,14 @@ class GlassSurface extends StatelessWidget {
           child: inner,
         ),
       );
-      if (liveBlur) {
+      if (blur > 0) {
         // Grouped: every glass surface under the same [BackdropGroup] (one
         // per page) shares a single read of the screen instead of one each.
+        // Pausing toggles `enabled` rather than removing the widget, so the
+        // tree shape never changes and the content (e.g. the mini player's
+        // play button) is not torn down and rebuilt at every scroll.
         content = BackdropFilter.grouped(
+          enabled: liveBlur,
           filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
           child: content,
         );
@@ -433,21 +437,15 @@ class GlassBarBackground extends StatelessWidget {
     return ValueListenableBuilder<bool>(
       valueListenable: glassScrolling,
       builder: (context, scrolling, _) {
-        if (scrolling) {
-          return DecoratedBox(
-            decoration: BoxDecoration(
-              color: _scrollingFill(context),
-              border: border,
-            ),
-            child: fill,
-          );
-        }
         return ClipRect(
           child: BackdropFilter.grouped(
+            enabled: !scrolling,
             filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: cs.surface.withValues(alpha: 0.62),
+                color: scrolling
+                    ? _scrollingFill(context)
+                    : cs.surface.withValues(alpha: 0.62),
                 border: border,
               ),
               child: fill,

@@ -7,6 +7,7 @@ import '../utils/app_messenger.dart';
 import '../utils/format_utils.dart';
 import '../utils/layout.dart';
 import '../utils/song_actions.dart';
+import '../widgets/empty_view.dart';
 import '../widgets/glass.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/song_card.dart';
@@ -17,6 +18,9 @@ const double _kSongRowExtent = 76;
 
 class FolderSongsPage extends StatefulWidget {
   final String folderLabel;
+
+  /// Folder on disk (needed for empty folders, and to accept moved-in files).
+  final String? folderPath;
   final List<File> files;
 
   /// Overrides the default "queue this folder and open the player" tap action.
@@ -28,6 +32,7 @@ class FolderSongsPage extends StatefulWidget {
   const FolderSongsPage({
     super.key,
     required this.folderLabel,
+    this.folderPath,
     required this.files,
     this.onSongTap,
     this.scrollToCurrent = false,
@@ -42,12 +47,14 @@ class _FolderSongsPageState extends State<FolderSongsPage> {
   late List<File> _files;
   final _scrollController = ScrollController();
   StreamSubscription<Set<String>>? _deletedSub;
+  StreamSubscription<Map<String, String>>? _movedSub;
 
   @override
   void initState() {
     super.initState();
     _files = _sorted(widget.files);
     _deletedSub = AudioManager().deletedFilesStream.listen(_onFilesDeleted);
+    _movedSub = AudioManager().movedFilesStream.listen(_onFilesMoved);
     if (widget.scrollToCurrent) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
     }
@@ -62,6 +69,7 @@ class _FolderSongsPageState extends State<FolderSongsPage> {
   @override
   void dispose() {
     _deletedSub?.cancel();
+    _movedSub?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -97,6 +105,29 @@ class _FolderSongsPageState extends State<FolderSongsPage> {
   Future<void> _deleteSelected() async {
     final deleted = await confirmAndDeleteSongs(context, _selected.toList());
     if (deleted && mounted) _clearSelection();
+  }
+
+  String? get _folder =>
+      widget.folderPath ??
+      (_files.isNotEmpty ? _files.first.parent.path : null);
+
+  void _onFilesMoved(Map<String, String> moves) {
+    if (!mounted) return;
+    final folder = _folder;
+    setState(() {
+      // Files that left this folder go away; files moved into it appear.
+      _files.removeWhere((f) => moves.containsKey(f.path));
+      _selected.removeAll(moves.keys);
+      for (final dst in moves.values) {
+        if (File(dst).parent.path == folder) _files.add(File(dst));
+      }
+      _files = _sorted(_files);
+    });
+  }
+
+  Future<void> _moveSelected() async {
+    final moved = await moveSongsToFolder(context, _selected.toList());
+    if (moved && mounted) _clearSelection();
   }
 
   void _onFilesDeleted(Set<String> paths) {
@@ -192,6 +223,14 @@ class _FolderSongsPageState extends State<FolderSongsPage> {
                     const SizedBox(width: 10),
                     GlassIconButton(
                       blur: 0,
+                      icon: Icons.drive_file_move_outline,
+                      size: 42,
+                      tooltip: l10n.moveToFolder,
+                      onPressed: _moveSelected,
+                    ),
+                    const SizedBox(width: 10),
+                    GlassIconButton(
+                      blur: 0,
                       icon: Icons.delete_outline_rounded,
                       size: 42,
                       tooltip: l10n.deleteSelected,
@@ -218,35 +257,44 @@ class _FolderSongsPageState extends State<FolderSongsPage> {
                 Builder(
                   builder: (bodyContext) {
                     final top = MediaQuery.paddingOf(bodyContext).top;
-                    final list = ValueListenableBuilder<String?>(
-                      valueListenable: AudioManager().currentPath,
-                      builder: (context, currentPath, _) => ListView.builder(
-                        controller: _scrollController,
-                        padding: EdgeInsets.fromLTRB(
-                          16,
-                          top + 8,
-                          16,
-                          (widget.showMiniPlayer && !wide ? 120 : 20) +
-                              bottomInset,
-                        ),
-                        itemCount: _files.length,
-                        itemBuilder: (_, i) {
-                          final file = _files[i];
-                          return SongCard(
-                            key: ValueKey(file.path),
-                            name: formatName(file.path),
-                            filePath: file.path,
-                            isActive: file.path == currentPath,
-                            selectionMode: _selecting,
-                            selected: _selected.contains(file.path),
-                            onLongPress: () => _toggleSelect(file.path),
-                            onTap: _selecting
-                                ? () => _toggleSelect(file.path)
-                                : () => _onTap(i),
+                    final Widget list = _files.isEmpty
+                        ? GlassMessage(
+                            icon: Icons.folder_open_rounded,
+                            message: l10n.emptyFolder,
+                          )
+                        : ValueListenableBuilder<String?>(
+                            valueListenable: AudioManager().currentPath,
+                            builder: (context, currentPath, _) =>
+                                ListView.builder(
+                                  controller: _scrollController,
+                                  padding: EdgeInsets.fromLTRB(
+                                    16,
+                                    top + 8,
+                                    16,
+                                    (widget.showMiniPlayer && !wide
+                                            ? 120
+                                            : 20) +
+                                        bottomInset,
+                                  ),
+                                  itemCount: _files.length,
+                                  itemBuilder: (_, i) {
+                                    final file = _files[i];
+                                    return SongCard(
+                                      key: ValueKey(file.path),
+                                      name: formatName(file.path),
+                                      filePath: file.path,
+                                      isActive: file.path == currentPath,
+                                      selectionMode: _selecting,
+                                      selected: _selected.contains(file.path),
+                                      onLongPress: () =>
+                                          _toggleSelect(file.path),
+                                      onTap: _selecting
+                                          ? () => _toggleSelect(file.path)
+                                          : () => _onTap(i),
+                                    );
+                                  },
+                                ),
                           );
-                        },
-                      ),
-                    );
                     if (!wide) return list;
                     return Row(
                       children: [

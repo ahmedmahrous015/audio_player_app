@@ -105,6 +105,19 @@ class AppLocalizations {
       'deselectAll': 'Deselect all',
       'deleteSelected': 'Delete selected',
       'cancelSelection': 'Cancel selection',
+      'newFolder': 'New folder',
+      'folderName': 'Folder name',
+      'create': 'Create',
+      'move': 'Move',
+      'moveToFolder': 'Move to folder',
+      'fileMoved': 'Moved to {folder}',
+      'filesMoved': '{count} files moved to {folder}',
+      'moveFailed': 'Could not move the file',
+      'folderCreated': 'Folder created',
+      'folderAlreadyExists': 'A folder with this name already exists',
+      'invalidFolderName': 'Enter a valid name (no "/")',
+      'folderCreateFailed': 'Could not create the folder',
+      'emptyFolder': 'This folder is empty',
     },
     'ar': {
       'myMusic': 'مشغل الصوت',
@@ -195,6 +208,19 @@ class AppLocalizations {
       'deselectAll': 'إلغاء تحديد الكل',
       'deleteSelected': 'حذف المحدد',
       'cancelSelection': 'إلغاء التحديد',
+      'newFolder': 'مجلد جديد',
+      'folderName': 'اسم المجلد',
+      'create': 'إنشاء',
+      'move': 'نقل',
+      'moveToFolder': 'نقل إلى مجلد',
+      'fileMoved': 'تم النقل إلى {folder}',
+      'filesMoved': 'تم نقل {count} ملف إلى {folder}',
+      'moveFailed': 'تعذّر نقل الملف',
+      'folderCreated': 'تم إنشاء المجلد',
+      'folderAlreadyExists': 'يوجد مجلد بهذا الاسم بالفعل',
+      'invalidFolderName': 'اكتب اسماً صحيحاً (بدون "/")',
+      'folderCreateFailed': 'تعذّر إنشاء المجلد',
+      'emptyFolder': 'هذا المجلد فارغ',
     },
   };
 
@@ -305,6 +331,21 @@ class AppLocalizations {
   String get deselectAll => translate('deselectAll');
   String get deleteSelected => translate('deleteSelected');
   String get cancelSelection => translate('cancelSelection');
+  String get newFolder => translate('newFolder');
+  String get folderName => translate('folderName');
+  String get create => translate('create');
+  String get move => translate('move');
+  String get moveToFolder => translate('moveToFolder');
+  String fileMoved(String folder) =>
+      translate('fileMoved', args: {'folder': folder});
+  String filesMoved(int count, String folder) =>
+      translate('filesMoved', args: {'count': count, 'folder': folder});
+  String get moveFailed => translate('moveFailed');
+  String get folderCreated => translate('folderCreated');
+  String get folderAlreadyExists => translate('folderAlreadyExists');
+  String get invalidFolderName => translate('invalidFolderName');
+  String get folderCreateFailed => translate('folderCreateFailed');
+  String get emptyFolder => translate('emptyFolder');
 }
 
 class _AppLocalizationsDelegate

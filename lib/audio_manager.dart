@@ -83,6 +83,12 @@ class AudioManager {
   /// screen listing files can drop them.
   Stream<Set<String>> get deletedFilesStream => _deletedController.stream;
 
+  final StreamController<Map<String, String>> _movedController =
+      StreamController<Map<String, String>>.broadcast();
+
+  /// Emits `{oldPath: newPath}` for files moved to another folder.
+  Stream<Map<String, String>> get movedFilesStream => _movedController.stream;
+
   /// Emits the path of a track that failed to load or play.
   Stream<String> get playbackErrorStream => _errorController.stream;
 
@@ -427,6 +433,40 @@ class AudioManager {
     if (!_deletedController.isClosed) _deletedController.add(paths);
   }
 
+  /// Call after files were moved (`{oldPath: newPath}`): keeps playback going
+  /// and notifies every listening screen.
+  void onFilesMoved(Map<String, String> moves) {
+    if (moves.isEmpty) return;
+    MetadataCache().evict(moves.keys);
+    final current = currentPath.value;
+    if (playlist.any((f) => moves.containsKey(f.path))) {
+      // The queue is one folder: moved-away files leave it, except the
+      // playing one, which keeps playing from its new location.
+      final position = player.position;
+      playlist = [
+        for (final f in playlist)
+          if (!moves.containsKey(f.path))
+            f
+          else if (f.path == current)
+            File(moves[f.path]!),
+      ];
+      if (playlist.isEmpty) {
+        _setCurrentPath(null);
+        unawaited(player.stop());
+      } else {
+        final target = moves[current] ?? current;
+        final index = playlist.indexWhere((f) => f.path == target);
+        unawaited(
+          _rebuildSources(
+            index < 0 ? 0 : index,
+            index < 0 ? Duration.zero : position,
+          ),
+        );
+      }
+    }
+    if (!_movedController.isClosed) _movedController.add(moves);
+  }
+
   void removeFromPlaylist(String path) => removeFromPlaylistBatch({path});
 
   void removeFromPlaylistBatch(Iterable<String> paths) {
@@ -480,6 +520,7 @@ class AudioManager {
     cancelSleepTimer();
     _sleepTickController.close();
     _deletedController.close();
+    _movedController.close();
     _errorController.close();
     player.dispose();
   }

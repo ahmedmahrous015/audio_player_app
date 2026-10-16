@@ -5,10 +5,12 @@ import 'package:share_plus/share_plus.dart';
 import '../audio_manager.dart';
 import '../device_utils.dart';
 import '../l10n/app_localizations.dart';
+import '../library.dart';
 import '../metadata_cache.dart';
 import '../pages/player_page.dart';
 import '../smooth_page_route.dart';
 import '../widgets/cover_art.dart';
+import '../widgets/glass.dart';
 import '../widgets/glass_sheet.dart';
 import 'app_messenger.dart';
 import 'format_utils.dart';
@@ -17,7 +19,7 @@ import 'layout.dart';
 /// Shared song actions (options sheet, delete, ringtone, share, details,
 /// play) used by every list and by the player screen.
 
-enum _SongAction { delete, ringtone, share, details }
+enum _SongAction { delete, ringtone, share, details, move }
 
 bool _openingPlayer = false;
 
@@ -84,6 +86,11 @@ Future<void> showSongOptions(BuildContext context, String path) async {
                 onTap: () => Navigator.pop(ctx, _SongAction.ringtone),
               ),
             GlassQuickAction(
+              icon: Icons.drive_file_move_outline,
+              label: l10n.move,
+              onTap: () => Navigator.pop(ctx, _SongAction.move),
+            ),
+            GlassQuickAction(
               icon: Icons.info_outline_rounded,
               label: l10n.details,
               onTap: () => Navigator.pop(ctx, _SongAction.details),
@@ -111,6 +118,8 @@ Future<void> showSongOptions(BuildContext context, String path) async {
       await setAsRingtone(context, path);
     case _SongAction.share:
       await shareSongs([path]);
+    case _SongAction.move:
+      await moveSongsToFolder(context, [path]);
     case _SongAction.details:
       showSongDetails(context, path);
   }
@@ -321,4 +330,145 @@ void showInfoDialog(
       );
     },
   );
+}
+
+/// Asks for a new folder name and creates it under the music folder.
+/// Returns the new folder's path, or null if cancelled / failed.
+Future<String?> showNewFolderDialog(BuildContext context) async {
+  final l10n = AppLocalizations.of(context);
+  final controller = TextEditingController();
+  String? error;
+
+  final name = await showGlassDialog<String>(
+    context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDialogState) {
+        final cs = Theme.of(ctx).colorScheme;
+        void submit() {
+          final value = controller.text.trim();
+          if (!Library.isValidFolderName(value)) {
+            setDialogState(() => error = l10n.invalidFolderName);
+          } else if (Library.folderExists(value)) {
+            setDialogState(() => error = l10n.folderAlreadyExists);
+          } else {
+            Navigator.pop(ctx, value);
+          }
+        }
+
+        return GlassDialogContent(
+          icon: Icons.create_new_folder_outlined,
+          title: l10n.newFolder,
+          body: GlassSurface(
+            blur: 0,
+            shadow: false,
+            borderRadius: const BorderRadius.all(Radius.circular(16)),
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => submit(),
+              style: TextStyle(color: cs.onSurface, fontSize: 16),
+              decoration: InputDecoration(
+                hintText: l10n.folderName,
+                errorText: error,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            GlassDialogAction(
+              label: l10n.cancel,
+              onTap: () => Navigator.pop(ctx),
+            ),
+            GlassDialogAction(label: l10n.create, primary: true, onTap: submit),
+          ],
+        );
+      },
+    ),
+  );
+  controller.dispose();
+  if (name == null) return null;
+
+  final path = await Library().createFolder(name);
+  showAppMessage(path != null ? l10n.folderCreated : l10n.folderCreateFailed);
+  return path;
+}
+
+const _kNewFolderChoice = '\u0000new-folder';
+
+/// Lets the user pick (or create) a folder and moves [paths] into it.
+/// Returns true if anything moved.
+Future<bool> moveSongsToFolder(BuildContext context, List<String> paths) async {
+  if (paths.isEmpty) return false;
+  final l10n = AppLocalizations.of(context);
+  final sources = paths.map((p) => File(p).parent.path).toSet();
+  final folders = [
+    for (final f in Library().allFolders)
+      // Hide the folder the songs are already in.
+      if (!(sources.length == 1 && sources.contains(f))) f,
+  ];
+
+  var target = await showGlassSheet<String>(
+    context,
+    builder: (ctx) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        GlassSheetTitle(l10n.moveToFolder),
+        GlassMenuGroup(
+          children: [
+            GlassMenuItem(
+              icon: Icons.create_new_folder_outlined,
+              label: l10n.newFolder,
+              active: true,
+              onTap: () => Navigator.pop(ctx, _kNewFolderChoice),
+            ),
+          ],
+        ),
+        if (folders.isNotEmpty)
+          GlassMenuGroup(
+            children: [
+              for (final f in folders)
+                GlassMenuItem(
+                  icon: Icons.folder_rounded,
+                  label: f.split('/').last,
+                  onTap: () => Navigator.pop(ctx, f),
+                ),
+            ],
+          ),
+      ],
+    ),
+  );
+  if (target == null || !context.mounted) return false;
+  if (target == _kNewFolderChoice) {
+    target = await showNewFolderDialog(context);
+    if (target == null) return false;
+  }
+
+  final result = await DeviceUtils.moveFiles(paths, target);
+  // The user tapped "Deny" in Android's own confirmation: nothing to report.
+  if (result.cancelled && result.moved.isEmpty) return false;
+  AudioManager().onFilesMoved(result.moved);
+
+  final folderName = target.split('/').last;
+  final moved = result.moved.length;
+  final failed = paths.length - moved;
+  if (moved == 0) {
+    showAppMessage(l10n.moveFailed);
+  } else if (failed > 0) {
+    showAppMessage(
+      '${l10n.filesMoved(moved, folderName)} — ${l10n.moveFailed} ($failed)',
+    );
+  } else {
+    showAppMessage(
+      moved == 1
+          ? l10n.fileMoved(folderName)
+          : l10n.filesMoved(moved, folderName),
+    );
+  }
+  return moved > 0;
 }

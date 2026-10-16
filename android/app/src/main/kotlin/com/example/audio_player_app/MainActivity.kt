@@ -20,6 +20,12 @@ import java.io.File
 class MainActivity : AudioServiceActivity() {
     private val CHANNEL = "com.example.audio_player_app/device"
     private val DELETE_REQUEST_CODE = 4217
+    private val MOVE_REQUEST_CODE = 4218
+
+    // State of an in-flight MediaStore write (move) confirmation (Android 11+).
+    private var pendingMoveResult: MethodChannel.Result? = null
+    private var pendingMoved: HashMap<String, String> = HashMap()
+    private var pendingMoveItems: List<Triple<String, Uri, String>> = emptyList()
 
     // State of an in-flight MediaStore delete confirmation (Android 11+).
     private var pendingDeleteResult: MethodChannel.Result? = null
@@ -46,6 +52,15 @@ class MainActivity : AudioServiceActivity() {
                         deleteFiles(paths, result)
                     } else {
                         result.error("INVALID_ARG", "paths is required", null)
+                    }
+                }
+                "moveFiles" -> {
+                    val paths = call.argument<List<String>>("paths")
+                    val target = call.argument<String>("targetDir")
+                    if (paths != null && target != null) {
+                        moveFiles(paths, target, result)
+                    } else {
+                        result.error("INVALID_ARG", "paths and targetDir are required", null)
                     }
                 }
                 else -> result.notImplemented()
@@ -138,8 +153,114 @@ class MainActivity : AudioServiceActivity() {
         result.success(deleted)
     }
 
+    /** Free destination path: "name.mp3", then "name (1).mp3", ... */
+    private fun uniqueTarget(dir: File, name: String): File {
+        var candidate = File(dir, name)
+        if (!candidate.exists()) return candidate
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (candidate.exists()) {
+            candidate = File(dir, "$base ($i)$ext")
+            i++
+        }
+        return candidate
+    }
+
+    private fun moveFiles(paths: List<String>, targetDir: String, result: MethodChannel.Result) {
+        if (pendingMoveResult != null || pendingDeleteResult != null) {
+            result.error("BUSY", "Another file request is already in progress", null)
+            return
+        }
+        val dir = File(targetDir)
+        if (!dir.exists()) dir.mkdirs()
+
+        val moved = HashMap<String, String>()
+        val needConsent = mutableListOf<Triple<String, Uri, String>>()
+        for (path in paths) {
+            val src = File(path)
+            if (!src.exists() || src.parentFile?.absolutePath == dir.absolutePath) continue
+            val dst = uniqueTarget(dir, src.name)
+            val ok = try { src.renameTo(dst) } catch (e: Exception) { false }
+            if (ok) {
+                moved[path] = dst.absolutePath
+            } else {
+                findAudioUri(path)?.let { needConsent.add(Triple(path, it, dst.absolutePath)) }
+            }
+        }
+        if (moved.isNotEmpty()) {
+            MediaScannerConnection.scanFile(
+                applicationContext, (moved.keys + moved.values).toTypedArray(), null, null)
+        }
+
+        if (needConsent.isEmpty()) {
+            result.success(moved)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val request = MediaStore.createWriteRequest(contentResolver, needConsent.map { it.second })
+                pendingMoveResult = result
+                pendingMoved = moved
+                pendingMoveItems = needConsent
+                startIntentSenderForResult(request.intentSender, MOVE_REQUEST_CODE, null, 0, 0, 0)
+            } catch (e: Exception) {
+                pendingMoveResult = null
+                result.success(moved)
+            }
+            return
+        }
+
+        // Android 10: works only for files this app may already write.
+        for ((path, uri, dst) in needConsent) {
+            applyMove(uri, dst)?.let { moved[path] = it }
+        }
+        result.success(moved)
+    }
+
+    /** Moves a MediaStore item by changing its folder; returns the new path. */
+    private fun applyMove(uri: Uri, dstPath: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return try {
+            val root = Environment.getExternalStorageDirectory().absolutePath
+            val dst = File(dstPath)
+            val relative = dst.parentFile!!.absolutePath.removePrefix(root).trim('/') + "/"
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relative)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, dst.name)
+            }
+            if (contentResolver.update(uri, values, null, null) <= 0) return null
+            // MediaStore may adjust the name on conflicts: read the real path.
+            contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                ?.takeIf { File(it).exists() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == MOVE_REQUEST_CODE) {
+            val result = pendingMoveResult
+            pendingMoveResult = null
+            if (result != null) {
+                val moved = HashMap(pendingMoved)
+                if (resultCode == Activity.RESULT_OK) {
+                    for ((path, uri, dst) in pendingMoveItems) {
+                        applyMove(uri, dst)?.let { moved[path] = it }
+                    }
+                    result.success(moved)
+                } else if (moved.isEmpty()) {
+                    result.error("CANCELLED", "The user declined the move request", null)
+                } else {
+                    result.success(moved)
+                }
+            }
+            return
+        }
         if (requestCode == DELETE_REQUEST_CODE) {
             val result = pendingDeleteResult
             pendingDeleteResult = null

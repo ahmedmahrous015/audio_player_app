@@ -85,12 +85,13 @@ class MyApp extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: const [Locale('en'), Locale('ar')],
-      localeResolutionCallback: (locale, supportedLocales) {
-        if (locale == null) return const Locale('en');
-        for (final supported in supportedLocales) {
-          if (supported.languageCode == locale.languageCode) {
-            return supported;
-          }
+      // Arabic (right-to-left) whenever it is among the device's preferred
+      // languages, even if it isn't the first one (e.g. a Mac set to
+      // English + Arabic); otherwise English.
+      localeListResolutionCallback: (locales, supportedLocales) {
+        final preferred = locales ?? const <Locale>[];
+        if (preferred.any((l) => l.languageCode == 'ar')) {
+          return const Locale('ar');
         }
         return const Locale('en');
       },
